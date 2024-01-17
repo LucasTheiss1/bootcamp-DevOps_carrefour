@@ -1,0 +1,85 @@
+name: bootcamp_carrefour
+
+# Controls when the workflow will run 
+on:
+  # Triggers the workflow on push or pull request events but only for the "main" branch
+  push:
+    branches: [ "Feature/Dev" ]
+  
+  workflow_dispatch:
+
+env:
+  # isto não é necessario apenas saiba que existe! 
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: 'us-east-1'
+
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      - name: Create S3 Bucket
+        run: |
+          aws s3api create-bucket --bucket bootcamp_carrefour-terraform-state --region us-east-1
+        
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v3
+
+      - name: Setup SSH Keys
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_rsa.pub
+          chmod 600 ~/.ssh/id_rsa
+          chmod 644 ~/.ssh/id_rsa.pub
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+        
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+        with:
+          terraform_wrapper: false
+      
+      - name: Terraform Init
+        run: terraform init
+      
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve -var="create_key=false"
+      
+    
+      - name: Get AWS Instance ID from Terraform Output
+        run: |
+          instance_id=$(terraform output -raw instance_id)
+          echo "INSTANCE_ID=$instance_id" >> $GITHUB_ENV
+      
+      - name: Wait for instance to be ready
+        run: |
+          while true; do
+            status=$(aws ec2 describe-instance-status --instance-ids $INSTANCE_ID --region us-east-1 --query 'InstanceStatuses[0].[InstanceState.Name, SystemStatus.Status, InstanceStatus.Status]' --output text)
+            arr=($status)
+            if [ "${arr[0]}" == "running" ] && [ "${arr[1]}" == "ok" ] && [ "${arr[2]}" == "ok" ]; then
+              echo "instancia pronta para utilização."
+              break
+            fi
+            echo "Aguardando a instancia ficar pronta..."
+            sleep 10
+          done
+      
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+
+     - name: Copy file to AWS instance
+        run: |
+          scp -i  ./path/to/file ubuntu@<your-ec2-instance-ip>:/path/on/aws/instance
+
+      - name: Execute file on AWS instance
+        run: |
+          ssh -i  ubuntu@<your-ec2-instance-ip> 'chmod +x /path/on/aws/instance/file && /path/on/aws/instance/file'
